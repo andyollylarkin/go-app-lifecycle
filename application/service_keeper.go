@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -9,6 +11,19 @@ const (
 	defaultPingPeriod  = time.Second * 15
 	defaultPingTimeout = time.Second * 5
 )
+
+var (
+	ServiceNotFound = errors.New("service not found")
+)
+
+type ServiceNotFoundError struct {
+	ServiceName string
+	Err         error
+}
+
+func (e *ServiceNotFoundError) Error() string {
+	return fmt.Sprintf("service %s not found", e.ServiceName)
+}
 
 type ServiceKeeper struct {
 	Services    map[string]*Service
@@ -25,6 +40,14 @@ func NewServiceKeeper(services map[string]*Service, pingPeriod time.Duration,
 		pingTimeout = defaultPingTimeout
 	}
 	return &ServiceKeeper{Services: services, PingPeriod: pingPeriod, PingTimeout: pingTimeout}
+}
+
+func (keeper *ServiceKeeper) Get(serviceName string) (any, error) {
+	srv := keeper.Services[serviceName]
+	if srv == nil {
+		return nil, ServiceNotFound
+	}
+	return (*srv).Get(), nil
 }
 
 func (keeper *ServiceKeeper) HealthCheck() error {

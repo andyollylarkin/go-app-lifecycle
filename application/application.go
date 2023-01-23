@@ -9,16 +9,14 @@ import (
 	"time"
 )
 
-// TODO: get service
 type Application struct {
-	services map[string]*Service // user defined services
-	//TODO вынести в отдельный тип service locator
+	services    map[string]*Service
 	sysSignals  []syscall.Signal
 	mainFunc    MainFunc
 	recoverFunc RecoverFunc
 	appState    ApplicationState
 	shutdownCh  chan struct{}
-	// time for gracefully application shutting down
+	// Time for gracefully application shutting down
 	shutdownTimeout time.Duration
 	waitFunc        func()
 	// After this exceeded will force app terminate.
@@ -36,7 +34,6 @@ func CreateApplication(logger zerolog.Logger, shutdownTimeout time.Duration, ini
 // Run application lifecycle. Must be called from main function
 func (app *Application) Run() error {
 	quitChan := app.initSysSignals()
-	//shutdownCh := make(chan struct{})
 	app.shutdownCh = make(chan struct{})
 	app.waitFunc = app.wait()
 	timeoutCtx, cancelInit := context.WithTimeout(context.Background(), app.initTimeout)

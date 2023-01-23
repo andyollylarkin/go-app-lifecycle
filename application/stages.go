@@ -39,7 +39,7 @@ func (c *Stage) Init(ctx context.Context, state *ApplicationState, keeper *Servi
 
 func (c *Stage) Start(ctx context.Context, state *ApplicationState, keeper *ServiceKeeper,
 	mainFunc MainFunc, waitFunc func()) error {
-	err := mainFunc(ctx, waitFunc)
+	err := mainFunc(ctx, waitFunc, keeper)
 	if err != nil {
 		return err
 	}

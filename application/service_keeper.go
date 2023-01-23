@@ -1,7 +1,7 @@
 package application
 
 import (
-	"errors"
+	"context"
 	"time"
 )
 
@@ -29,15 +29,20 @@ func NewServiceKeeper(services map[string]*Service, pingPeriod time.Duration,
 
 func (keeper *ServiceKeeper) HealthCheck() error {
 	// TODO: services healthcheck
-	//attemps := 3
-	//attempsDelay := time.Second
-	//timeout, cancel := context.WithTimeout(context.Background(), keeper.PingTimeout)
-	//defer cancel()
-	//for {
-	//	time.Sleep(keeper.PingPeriod) // pool every service after timeout
-	//}
-	println("start healthcheck")
-	time.Sleep(time.Second * 4)
-	println("done healthcheck")
-	return errors.New("error when health check")
+	services := keeper.Services
+	var err error
+OUTER:
+	for {
+		time.Sleep(keeper.PingPeriod)
+		for _, srv := range services {
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), keeper.PingTimeout)
+			s := *srv
+			err = s.Ping(timeoutCtx)
+			cancel()
+			if err != nil {
+				break OUTER
+			}
+		}
+	}
+	return err
 }

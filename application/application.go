@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// TODO: get service
 type Application struct {
 	services map[string]*Service // user defined services
 	//TODO вынести в отдельный тип service locator
@@ -16,8 +17,10 @@ type Application struct {
 	mainFunc    MainFunc
 	recoverFunc RecoverFunc
 	appState    ApplicationState
+	shutdownCh  chan struct{}
 	// time for gracefully application shutting down
 	shutdownTimeout time.Duration
+	waitFunc        func()
 	// After this exceeded will force app terminate.
 	initTimeout time.Duration
 	logger      zerolog.Logger //TODO: direct dependency from zerolog logger. Extract logger interface
@@ -27,14 +30,15 @@ type Application struct {
 func CreateApplication(logger zerolog.Logger, shutdownTimeout time.Duration, initTimeout time.Duration,
 	mainFunc MainFunc, recoverFunc RecoverFunc) Application {
 	return Application{appState: StateStart, logger: logger, shutdownTimeout: shutdownTimeout,
-		initTimeout: initTimeout, mainFunc: mainFunc, recoverFunc: recoverFunc}
+		initTimeout: initTimeout, mainFunc: mainFunc, recoverFunc: recoverFunc, services: make(map[string]*Service)}
 }
 
 // Run application lifecycle. Must be called from main function
 func (app *Application) Run() error {
 	quitChan := app.initSysSignals()
-	appTermination := make(chan struct{})
-	shutdownCh := make(chan struct{})
+	//shutdownCh := make(chan struct{})
+	app.shutdownCh = make(chan struct{})
+	app.waitFunc = app.wait()
 	timeoutCtx, cancelInit := context.WithTimeout(context.Background(), app.initTimeout)
 	defer cancelInit()
 	appStage := NewApplicationStage()
@@ -44,17 +48,17 @@ func (app *Application) Run() error {
 	err := appStage.Init(timeoutCtx, &app.appState, keeper)
 	if err != nil {
 		app.logger.Error().Msgf("Error while initialization: %s", err.Error())
-		close(appTermination)
+		return err
 	}
 	if err == nil {
 		app.logger.Info().Msg("The initialization phase was successful.")
 	}
 
-	healthCheckCh := make(chan error)
+	healthCheckErrCh := make(chan error)
 	if err == nil {
 		go func() {
 			err = keeper.HealthCheck()
-			healthCheckCh <- err
+			healthCheckErrCh <- err
 		}()
 	}
 
@@ -64,19 +68,19 @@ func (app *Application) Run() error {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					//TODO: тут возможно стоит возобновлять работу mainFunc, либо закрывать appTermination
 					if m, ok := r.(string); ok {
-						app.logger.Error().Msg(m)
+						app.logger.Error().Msgf("Main application panic: %s", m)
 					}
 					if app.recoverFunc != nil {
-						err := app.recoverFunc()
+						err = app.recoverFunc()
 						if err != nil {
 							app.logger.Error().Msgf("Error while recover: %s", err.Error())
 						}
+						close(appErrCh)
 					}
 				}
 			}()
-			err = appStage.Start(context.TODO(), &app.appState, keeper, shutdownCh, app.mainFunc)
+			err = appStage.Start(context.TODO(), &app.appState, keeper, app.mainFunc, app.waitFunc)
 			appErrCh <- err
 
 		}()
@@ -85,31 +89,25 @@ func (app *Application) Run() error {
 
 	select {
 	case err = <-appErrCh:
-		println("App error")
-		err = app.gracefulShutdownApp(appStage, shutdownCh)
-		app.logger.Err(err)
-		return err
-	case err = <-healthCheckCh:
-		app.logger.Error().Msgf("Health check error: %s", err.Error())
-		err = app.gracefulShutdownApp(appStage, shutdownCh)
 		if err != nil {
-			app.logger.Error().Msgf("App shutdown error: %s", err.Error())
+			app.logger.Error().Msgf("Main application error: %s", err.Error())
 		}
-		return err
+		return app.shutdownHandler(appStage)
+	case err = <-healthCheckErrCh:
+		if err != nil {
+			app.logger.Error().Msgf("Health check error: %s", err.Error())
+		}
+		return app.shutdownHandler(appStage)
 	case sig := <-quitChan:
 		app.logger.Info().Msgf("Received signal: %s. Waiting for graceful completion.", sig.String())
-		err = app.gracefulShutdownApp(appStage, shutdownCh)
-		if err != nil {
-			app.logger.Info().Msgf("App shutdown error: %s", err.Error())
-		}
-		//time.Sleep(app.shutdownTimeout)
-		//close(shutdownCh)
-		app.logger.Info().Msgf("Interrupt by system signal, %s", sig.String())
-	case <-appTermination:
-		err = app.gracefulShutdownApp(appStage, shutdownCh)
-		return err
+		return app.shutdownHandler(appStage)
 	}
-	return nil
+}
+
+func (app *Application) wait() func() {
+	return func() {
+		<-app.shutdownCh
+	}
 }
 
 // SetSysSignals append os signal(s) to application
@@ -121,8 +119,8 @@ func (app *Application) SetSysSignals(signals ...syscall.Signal) *Application {
 	return app
 }
 
-func (app *Application) RegisterService(serviceName string, service *Service) *Application {
-	app.services[serviceName] = service
+func (app *Application) RegisterService(serviceName string, service Service) *Application {
+	app.services[serviceName] = &service
 	return app
 }
 
@@ -138,11 +136,11 @@ func (app *Application) initSysSignals() (sysQuitSignal chan os.Signal) {
 	return sysQuitSignal
 }
 
-func (app *Application) gracefulShutdownApp(appStage *ApplicationStage, shutdownCh chan struct{}) error {
+func (app *Application) gracefulShutdownApp(appStage *Stage) error {
 	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), app.shutdownTimeout)
 	defer cancelShutdown()
 	app.logger.Info().Msg("Wait graceful shutdown.")
-	err := appStage.Shutdown(ctxShutdown, &app.appState, shutdownCh)
+	err := appStage.Shutdown(ctxShutdown, &app.appState, app.shutdownCh)
 	if err != nil {
 		app.logger.Err(err)
 		return err
@@ -159,4 +157,12 @@ func (app *Application) gracefulShutdownApp(appStage *ApplicationStage, shutdown
 	app.logger.Info().Msg("Resource uninitialization completed.")
 	app.logger.Info().Msg("Application has completed")
 	return err
+}
+
+func (app *Application) shutdownHandler(appStage *Stage) error {
+	shutdownErr := app.gracefulShutdownApp(appStage)
+	if shutdownErr != nil {
+		app.logger.Error().Msgf("Error while shutdown: %s", shutdownErr.Error())
+	}
+	return shutdownErr
 }

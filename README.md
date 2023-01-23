@@ -1,4 +1,4 @@
-![Golang mascot](https://listimg.pinclipart.com/picdir/s/571-5718150_go-clipart.png)
+![Golang mascot](./gopher.png)
 
 ## About
 

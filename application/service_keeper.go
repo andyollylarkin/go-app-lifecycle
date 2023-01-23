@@ -28,7 +28,6 @@ func NewServiceKeeper(services map[string]*Service, pingPeriod time.Duration,
 }
 
 func (keeper *ServiceKeeper) HealthCheck() error {
-	// TODO: services healthcheck
 	services := keeper.Services
 	var err error
 OUTER:

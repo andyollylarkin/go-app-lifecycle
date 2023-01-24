@@ -2,17 +2,27 @@ package application
 
 import "sync/atomic"
 
-type ApplicationState int32
+type State int32
 
 const (
-	StateStart = ApplicationState(iota) // начальное состояние приложения
+	StateStart = State(iota) // initial state
 	StateInit
 	StateRunning
-	StateDeInit
 	StateShutdown
+	StateUninit
+	StateTerminated
 )
 
-func ChangeState(oldState *ApplicationState, newState ApplicationState) {
+// ChangeState atomically changes the application state
+func ChangeState(oldState *State, newState State) {
 	var stateAddr = (*int32)(oldState)
 	atomic.CompareAndSwapInt32(stateAddr, int32(*oldState), int32(newState))
+}
+
+// IsStateEqual compare application state with target state. True if states is equal, false otherwise
+func IsStateEqual(current State, target State) bool {
+	if current == target {
+		return true
+	}
+	return false
 }

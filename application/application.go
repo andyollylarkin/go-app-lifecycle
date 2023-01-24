@@ -10,12 +10,13 @@ import (
 )
 
 type Application struct {
-	services    map[string]*Service
-	sysSignals  []syscall.Signal
-	mainFunc    MainFunc
-	recoverFunc RecoverFunc
-	appState    ApplicationState
-	shutdownCh  chan struct{}
+	services      map[string]*Service
+	serviceKeeper *ServiceKeeper
+	sysSignals    []syscall.Signal
+	mainFunc      MainFunc
+	recoverFunc   RecoverFunc
+	appState      State
+	shutdownCh    chan struct{}
 	// Time for gracefully application shutting down
 	shutdownTimeout time.Duration
 	waitFunc        func()
@@ -39,8 +40,9 @@ func (app *Application) Run() error {
 	timeoutCtx, cancelInit := context.WithTimeout(context.Background(), app.initTimeout)
 	defer cancelInit()
 	appStage := NewApplicationStage()
-
 	keeper := NewServiceKeeper(app.services, 0, 0)
+	app.serviceKeeper = keeper
+
 	app.logger.Info().Msg("Start initialization phase.")
 	err := appStage.Init(timeoutCtx, &app.appState, keeper)
 	if err != nil {
@@ -146,7 +148,7 @@ func (app *Application) gracefulShutdownApp(appStage *Stage) error {
 	app.logger.Info().Msg("Resource uninitialization.")
 	uninitTimeoutCtx, uninitCancel := context.WithTimeout(context.Background(), app.initTimeout)
 	defer uninitCancel()
-	err = appStage.Uninit(uninitTimeoutCtx, &app.appState)
+	err = appStage.Uninit(uninitTimeoutCtx, &app.appState, app.serviceKeeper)
 	if err != nil {
 		app.logger.Error().Msgf("Error when uninitialization: %s", err)
 		return err
@@ -157,6 +159,7 @@ func (app *Application) gracefulShutdownApp(appStage *Stage) error {
 }
 
 func (app *Application) shutdownHandler(appStage *Stage) error {
+	ChangeState(&app.appState, StateShutdown)
 	shutdownErr := app.gracefulShutdownApp(appStage)
 	if shutdownErr != nil {
 		app.logger.Error().Msgf("Error while shutdown: %s", shutdownErr.Error())
